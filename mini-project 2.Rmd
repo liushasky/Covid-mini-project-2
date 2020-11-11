@@ -1,0 +1,214 @@
+---
+title: "mini-project 2"
+author: "Sha Liu"
+date: "11/8/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning=FALSE, fig.height=4, fig.width=8)
+install.packages("tidyverse")
+library(tidyverse)
+library(readxl)
+library(MASS)
+library(arm)
+library(mgcv)
+library(tidyverse)
+library(ggthemes)
+```
+
+```{r}
+covid <- read.csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv",
+                     stringsAsFactors = FALSE) %>%
+  filter(date == max(date) & county != "New York City") 
+
+kolko <- read_excel("kolko_covid_shareable.xlsx")
+
+covid <- left_join(covid, kolko, by = c("fips" = "county")) %>%
+  filter(!is.na(density))
+
+covid <- rename(covid, cases = cases.x, deaths = deaths.x)
+
+# Standardized cases by population per county, created a new variable named casespercounty
+covid <- covid %>% 
+  mutate(casespercounty = cases/popestimate2019)
+
+names(covid)
+
+summary(covid$density)
+summary(covid$lncbsapop)
+summary(covid$casespercounty)
+head(covid)
+```
+
+# Top 10 correlated varibales
+
+```{r}
+# install.packages("pkgconfig")
+# devtools::install_github("laresbernardo/lares")
+library(lares)
+corr_var(covid, # name of dataset
+  casespercounty, # name of variable to focus on
+  top = 10 # display top 10 correlations
+) 
+```
+
+```{r}
+cor(covid$density, covid$lncbsapop)
+```
+
+## **Executive summary**					
+We explore the relationship between covid confirmed caes and variables like Tract-weighted household density and Natural log of the Core Based Statistical Area population and other variables from January 2020 to present using data from the Github website (https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv). In our data exploratory analysis, we find that ...
+
+## **Relationship between density and COVID incidence**
+We begin by examining the relationship between between density and COVID incidence. we found that as the density goes up till 7, the confirmed cases rate per county goes up. The the confirmed cases rate per county keeps the same until it hits density of 1000, then the confirmed cases goes down. 
+
+```{r}
+ggplot(covid, aes(x= density, y = casespercounty)) +
+  geom_point() + geom_smooth() +
+  labs(y="Confirmed COVID cases rates per County",
+       x="Tract-weighted household density",
+       title="Figure 1: Confirmed COVID cases rates per County as of date = max(covid$date)",
+       caption = "Data from https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv") +
+  theme_minimal() +
+  scale_color_colorblind() +
+  scale_y_continuous(labels = scales::percent) + 
+  scale_x_log10(labels = scales::comma)
+```
+
+## **Relationship between CBSA population size and COVID incidence**
+We then examine the relationship between between CBSA population size and COVID incidence. we found that as the Natural log of the Core Based Statistical Area population goes up till 9, the confirmed cases rate per county goes up. Then the confirmed cases rate per county slowly goes down as the popultion size increases
+
+```{r}
+ggplot(covid, aes(x = lncbsapop, y = casespercounty)) +
+  geom_point() + geom_smooth() +
+  labs(y="Confirmed COVID cases rates per County",
+       x="Natural log of the Core Based Statistical Area population",
+       title="Figure 1: Confirmed COVID cases rates per County as of date = max(covid$date)",
+       caption = "Data from https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv") +
+  theme_minimal() +
+  scale_color_colorblind() +
+  scale_y_continuous(labels = scales::percent)
+```
+## **GDP per capita in 1960 and growth rate since 1960** 
+
+We continue to examine the relationship between COVID incidence with both density and CPBA population size as the only two explanatory variables. We have found that model gam give us a good fit with the data. We use ...
+
+```{r}
+ggplot(covid, aes(x = density, y = casespercounty)) + geom_point(size = 0.7) +
+  facet_grid(~cut_number(lncbsapop, n=6)) + geom_smooth(method = "loess", color = "orange") + geom_smooth(method = "gam", color = "green") + 
+  labs(y="Confirmed COVID cases rates per County",
+       x="Tract-weighted household density",
+       title="Figure 1: Confirmed COVID cases rates per County as of date = max(covid$date) ",
+       subtitle = "faceted by CBSA population size.",
+       caption = "Data from https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv") +
+  theme_minimal() +
+  scale_color_colorblind() +
+  scale_y_continuous(labels = scales::percent) + 
+  scale_x_log10(labels = scales::comma)
+
+```
+
+## **Interaction**	
+
+I will need an interaction between density and lncbsapop. From both graphs above, we can see that the faceted graphs do not have the same shapes and slopes, therefore there is a need for interaction terms. Since there is an interaction, I decide to fit both year and length with a non-parametric gam model.
+
+# GAM
+
+```{r}
+covid.gam = gam(casespercounty ~ s(density, lncbsapop) + s(age60plus) + s(black_pct) + s(seasonal_units) + s(obesity) + s(college) , data = covid, method = "REML")
+
+covid.gam.df = data.frame(covid, .fitted = fitted.values(covid.gam), 
+                          .resid = residuals(covid.gam))
+
+ggplot(covid.gam.df, aes(x = density, y = .resid)) + geom_point() + #facet_wrap(~cut_number(lncbsapop, n=9), ncol=3) +
+  ggtitle("GAM residuals") +
+  geom_smooth(method = "lm", se = FALSE)
+
+AIC(covid.gam)
+
+ggplot(covid.gam.df, aes(x = lncbsapop, y = .resid)) + geom_point() + facet_wrap(~cut_number(density, n=9), ncol=3) +
+  ggtitle("GAM residuals") +
+  geom_smooth(method = "lm", se = FALSE)
+```
+
+```{r}
+ggplot(covid.gam.df, aes(x = density, y = .fitted)) +
+  geom_line() + facet_wrap(~cut_number(lncbsapop, n=9), ncol=3) + ggtitle("GAM fitted values") +
+  geom_point(data = covid, aes(y = casespercounty), color = "blue", alpha = 0.1)
+
+summary(covid.gam)
+```
+
+# Plot the model
+
+```{r}
+summary(covid.gam)
+covid.grid = expand.grid(lncbsapop = c(5, 7, 9, 11, 13, 15, 17),
+                          density = 0:15523)
+covid.pred = predict(covid.gam, newdata = covid.grid)
+covid.plot.df = data.frame(covid.grid, casespercounty = as.vector(covid.pred))
+```
+
+# Visualize the fit
+
+```{r}
+ggplot(covid.plot.df, aes(x = density, y = casespercounty)) +
+  geom_line() + facet_wrap(~cut_number(density, n=4)) + ggtitle("GAM fitted values") 
+```
+
+Visualize using geom_raster():
+
+```{r}
+library(metR)
+ggplot(covid.plot.df, aes(x = lncbsapop, y = casespercounty, z = density, fill = density)) +
+  geom_raster() + coord_fixed() +
+  scale_fill_distiller(palette = "RdYlBu") +
+  geom_contour(binwidth = 20) + geom_text_contour(binwidth = 40)
+```
+
+# GLM model
+
+```{r}
+covid.glm1 = glm(casespercounty ~ density * lncbsapop + age60plus + black_pct + seasonal_units + obesity + college,  family = poisson, data = covid)
+covid.glm2 = glm(casespercounty ~ density * lncbsapop + age60plus + black_pct + seasonal_units + obesity + college,  family = poisson, data = covid)
+covid.glm3 = glm(casespercounty ~ density * lncbsapop + age60plus + black_pct + seasonal_units + obesity,  family = poisson, data = covid)
+
+summary(covid.glm1)
+summary(covid.glm2)
+summary(covid.glm3)
+```
+
+We first plot the residuals against the fitted values on the response (original) scale, and see what happens.
+
+```{r}
+covid.fitted = fitted.values(covid.glm1)
+covid.resid = residuals(covid.glm, type = "response")
+covid.glm.df = data.frame(covid, .fitted = covid.fitted,
+  .resid = covid.resid)
+ggplot(covid.glm.df, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_smooth(method = "loess", span = 1,
+    method.args = list(degree = 1))
+```
+
+# offset
+
+```{r}
+covid.quasi = glm(cases ~ density + lncbsapop + age60plus + black_pct + seasonal_units + obesity + college,
+    family = quasipoisson, offset = log(popestimate2019),
+    data = covid)
+summary(covid.quasi)
+```
+
+# 4. ...
+
+
+```{r}
+periods = filter(covid, date %in% c("2020-04-30", "2020-08-31", max(covid$date)))
+privot_wider
+```
+
+
+
+
